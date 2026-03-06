@@ -8,6 +8,9 @@ export const sendOrderEmail = async (order, status) => {
   try {
     let message = "";
     switch (status.toLowerCase()) {
+       case "confirmed":
+        message = "🛒 Your order has been placed successfully.";
+        break;
       case "processing":
         message = "🛠 Your order is being processed.";
         break;
@@ -32,7 +35,8 @@ export const sendOrderEmail = async (order, status) => {
         to_name: order.userName,
         order_id: order._id,
         order_status: status,
-        order_status_message: message
+        order_status_message: message,
+     product_details: order.products || "N/A",
       },
       PUBLIC_KEY
     );

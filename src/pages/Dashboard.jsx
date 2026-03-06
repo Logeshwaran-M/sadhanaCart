@@ -77,9 +77,12 @@ const safeText = (val) =>
 
 const Dashboard = () => {
   const navigate = useNavigate();
+  const [products, setProducts] = useState([]);
+  const [lastVisible, setLastVisible] = useState(null); // TRACK FOR PAGINATION
+  const [hasMore, setHasMore] = useState(true);
+  const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
-  const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [subCategories, setSubCategories] = useState([]);
   const [loading, setLoading] = useState(true);

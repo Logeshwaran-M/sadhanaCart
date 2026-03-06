@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { collection, onSnapshot, query, where ,collectionGroup,getDoc} from 'firebase/firestore';
+import { db } from '../firebase/config';
+
 import { 
   RefreshCw, 
   ChevronDown, 
@@ -20,6 +23,7 @@ import {
 import { orderService } from '../firebase/services';
 import { debounce } from 'lodash';
 import { sendOrderEmail } from '../utils/sendOrderEmail';
+
 
 const Orders = () => {
   const [orders, setOrders] = useState([]);
@@ -68,27 +72,35 @@ const Orders = () => {
   }, []);
 
   // Optimized fetch with caching
-  const fetchOrders = useCallback(async () => {
-    try {
-      setLoading(true);
-      console.log('Fetching orders from Firebase...');
-      
-      const fetchedOrders = await orderService.getAll();
-      
-      console.log('Orders fetched successfully:', fetchedOrders.length);
-      
-      setOrders(fetchedOrders);
-      
-      // Calculate stats immediately
-      const stats = calculateStats(fetchedOrders);
-      setOrderStats(stats);
-      
-    } catch (error) {
-      console.error('Error fetching orders:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [calculateStats]);
+const fetchOrders = useCallback(async () => {
+  try {
+    setLoading(true);
+    const fetchedOrders = await orderService.getAll();
+
+    // Remove duplicates using a Map (Key = Order ID)
+    const uniqueMap = new Map();
+    fetchedOrders.forEach(order => {
+      if (order.id) uniqueMap.set(order.id, order);
+    });
+
+    const uniqueList = Array.from(uniqueMap.values());
+
+    // Sort: Newest first
+    uniqueList.sort((a, b) => {
+      const timeA = a.createdAt?.seconds || a.orderDate?.seconds || 0;
+      const timeB = b.createdAt?.seconds || b.orderDate?.seconds || 0;
+      return timeB - timeA;
+    });
+
+    setOrders(uniqueList);
+    setOrderStats(calculateStats(uniqueList));
+  } catch (error) {
+    console.error('Error:', error);
+  } finally {
+    setLoading(false);
+  }
+}, [calculateStats]);
+
 
   // Debounced search function
   const debouncedSearch = useMemo(
@@ -238,7 +250,6 @@ const Orders = () => {
       };
       
       // We pass "Confirmed" as the status for new orders
-      await sendOrderEmail(emailData, "Confirmed");
       }
       
       setShowModal(false);
@@ -284,7 +295,7 @@ const Orders = () => {
         userEmail: currentOrder.customerEmail,
         _id: orderId,
       };
-      await sendOrderEmail(emailData, newStatus);
+      sendOrderEmail(emailData,newStatus)
     }
       // Refresh to ensure consistency
       await fetchOrders();
@@ -297,35 +308,38 @@ const Orders = () => {
       await fetchOrders(); 
     }
   };
-
- const handleStatusSelectChange = async (orderId, newStatus) => {
-  // 1. Find the order details from the current list
-  const orderToUpdate = orders.find(o => o.id === orderId);
-  
-  if (!orderToUpdate) return;
-
+const handleStatusSelectChange = async (orderId, newStatus) => {
   try {
-    // 2. Update Firebase immediately
-    await orderService.updateStatus(orderId, newStatus, orderToUpdate.customerId);
+    setLoading(true); // Optional: show spinner
     
-    // 3. Trigger the Email automatically
-    const emailData = {
-      userName: orderToUpdate.customerName,
-      userEmail: orderToUpdate.customerEmail,
-      _id: orderId,
-    };
-    await sendOrderEmail(emailData, newStatus);
+    // 1. Call the service (now pointing to the correct direct path)
+    await orderService.updateStatus(orderId, newStatus);
+    
+    // 2. Find order details for the email
+    const currentOrder = orders.find(o => o.id === orderId);
+    
+    if (currentOrder) {
+      const emailData = {
+        userName: currentOrder.customerName,
+        userEmail: currentOrder.customerEmail,
+        _id: orderId,
+      };
+      
+      // 3. Send the email
+      await sendOrderEmail(emailData, newStatus);
+    }
 
-    // 4. Refresh the UI to show the new status
+    // 4. Refresh UI
     await fetchOrders();
-    console.log(`✅ Status changed to ${newStatus} and email sent.`);
+    console.log(`✅ Status updated to ${newStatus}`);
 
   } catch (error) {
-    console.error('Error updating status:', error);
-    alert('Failed to update status automatically.');
+    console.error('Update failed:', error);
+    alert('Failed to update status. Make sure the ID is correct.');
+  } finally {
+    setLoading(false);
   }
 };
-
   const handleStatusUpdateClick = async (orderId, customerId = null) => {
     const newStatus = pendingStatusChanges[orderId];
     if (newStatus) {
@@ -444,6 +458,80 @@ const Orders = () => {
     }
     return null;
   };
+
+
+
+// Add this ref at the very top of your Orders component (after your states)
+const processedOrders = React.useRef(new Set());
+
+// Ensure this ref is defined at the top of your component
+
+useEffect(() => {
+  const ordersRef = collectionGroup(db, "orders");
+  const appStartTime = Date.now();
+
+  const unsubscribe = onSnapshot(ordersRef, async (snapshot) => {
+    snapshot.docChanges().forEach(async (change) => {
+      const orderData = change.doc.data();
+      const orderId = change.doc.id;
+      const status = orderData.orderStatus || orderData.status;
+
+      // Format Products into a readable string
+      const items = orderData.products || orderData.items || [];
+      const formattedProducts = items.length > 0 
+        ? items.map(item => `${item.name || item.productName} (x${item.quantity || 1})`).join(", ")
+        : "No items listed";
+
+      if (change.type === "added") {
+        const timestamp = orderData.orderDate || orderData.createdAt;
+        const orderTime = timestamp?.seconds * 1000 || 0;
+        const isBrandNew = orderTime > appStartTime && (Date.now() - orderTime) < 60000;
+
+        if (isBrandNew && !processedOrders.current.has(orderId)) {
+          processedOrders.current.add(orderId);
+          // Pass the formatted products here
+          await handleEmailSend(change.doc.ref.parent.parent, orderId, "Confirmed", formattedProducts);
+        }
+      }
+
+      if (change.type === "modified") {
+        if (status && status.toLowerCase() !== "pending") {
+          // Status updates also need formatted products
+          await handleEmailSend(change.doc.ref.parent.parent, orderId, status, formattedProducts);
+        }
+      }
+    });
+  });
+
+  const handleEmailSend = async (userRef, orderId, status, productDetails) => {
+    try {
+      if (userRef) {
+        const userSnap = await getDoc(userRef);
+        if (userSnap.exists()) {
+          const userData = userSnap.data();
+          if (userData.email) {
+            console.log("📤 PREPARING EMAIL PAYLOAD:", {
+            to: userData.email,
+            id: orderId,
+            status: status,
+            items: productDetails // This should show your products
+          });
+            await sendOrderEmail({
+              userEmail: userData.email,
+              userName: userData.name || "Customer",
+              _id: orderId,
+              products: productDetails // Pass string to the utility
+            }, status);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("❌ Email trigger error:", err);
+    }
+  };
+
+  return () => unsubscribe();
+}, []);
 
   const extractOrderSKUs = (order) => {
     const skus = [];

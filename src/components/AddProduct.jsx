@@ -8,6 +8,7 @@ import {
   getFirestore,
   serverTimestamp
 } from 'firebase/firestore';
+import {  onSnapshot, query, orderBy } from 'firebase/firestore';
 import { 
   ref, 
   uploadBytes, 
@@ -77,18 +78,31 @@ const AddProduct = ({
   const storage = getStorage(app);
 
   // Extract unique brands from products
-  useEffect(() => {
-    if (products && products.length > 0) {
-      const brandsSet = new Set();
-      products.forEach(product => {
-        if (product.brand && product.brand.trim() !== '' && product.brand !== 'NA') {
-          brandsSet.add(product.brand.trim());
-        }
-      });
-      const sortedBrands = Array.from(brandsSet).sort();
-      setUniqueBrands(sortedBrands);
-    }
-  }, [products]);
+useEffect(() => {
+  const brandsRef = collection(db, "brands");
+  const q = query(brandsRef, orderBy("name", "asc"));
+
+  const unsubscribe = onSnapshot(q, (snapshot) => {
+    // Map both the ID and the Name to ensure uniqueness
+    const brandsList = snapshot.docs.map(doc => ({
+      id: doc.id, 
+      name: doc.data().name?.trim()
+    }))
+    .filter(brand => brand.name && brand.name !== 'NA' && brand.name !== '');
+
+    // OPTIONAL: Double-check for duplicate names in the database
+    const seen = new Set();
+    const filteredUnique = brandsList.filter(brand => {
+      const duplicate = seen.has(brand.name.toLowerCase());
+      seen.add(brand.name.toLowerCase());
+      return !duplicate;
+    });
+
+    setUniqueBrands(filteredUnique);
+  });
+
+  return () => unsubscribe();
+}, []);
 
   const [formData, setFormData] = useState({
     basesku: '',
@@ -646,11 +660,11 @@ const AddProduct = ({
                       className="w-full px-4 py-3 bg-gray-800 border border-gray-600 rounded-xl text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200"
                       disabled={loading}
                     >
-                      {uniqueBrands.map((brand) => (
-                        <option key={brand} value={brand}>
-                          {brand}
-                        </option>
-                      ))}
+                     {uniqueBrands.map((brand) => (
+ <option key={brand.id} value={brand.name}>
+    {brand.name}
+  </option>
+))}
                     </select>
                   </div>
                   <div>
