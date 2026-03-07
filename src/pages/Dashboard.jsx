@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
-  Plus, RefreshCw, Package, AlertTriangle, Clock, 
-  Archive, Truck, CheckCircle, X, Camera, Edit, 
+  Plus, RefreshCw, Package, AlertTriangle, Clock, Truck, CheckCircle, X, Camera, Edit, 
   Trash2, Upload, Search, Eye, DollarSign, Barcode,
-  Ruler, Weight, Tag, Layers, TrendingUp, Filter,
-  ChevronRight, BarChart3, Users, ShoppingBag, Zap, Star
+  Ruler, Weight, Filter,
+  ChevronRight, ShoppingBag, Zap, Star
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { productService, categoryService, subCategoryService, orderService } from '../firebase/services';
-import { doc, updateDoc, getFirestore, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, updateDoc, getFirestore, setDoc, deleteDoc, serverTimestamp, } from 'firebase/firestore';
 import AddProduct from '../components/AddProduct';
 
 // Skeleton Loader Component
@@ -97,6 +96,7 @@ const Dashboard = () => {
   const [itemsPerPage] = useState(10);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState('all'); // 'all' or 'featured'
+  const [totalProductCount, setTotalProductCount] = useState(0);
 
 
   const [orderStats, setOrderStats] = useState({
@@ -108,6 +108,30 @@ const Dashboard = () => {
     cancelled: 0
   });
 
+
+const loadMoreProducts = async () => {
+  if (!lastVisible || isFetchingMore) return;
+
+  try {
+    setIsFetchingMore(true);
+
+    const { products: newProducts, lastDoc } =
+      await productService.getPaginated(50, lastVisible);
+
+    if (!newProducts.length) {
+      setHasMore(false);
+      return;
+    }
+
+    setProducts(prev => [...prev, ...newProducts]);
+    setLastVisible(lastDoc);
+
+  } catch (error) {
+    console.error("Error loading more products:", error);
+  } finally {
+    setIsFetchingMore(false);
+  }
+};
   // Optimized data fetching with debouncing
   const fetchAllData = useCallback(async () => {
     try {
@@ -119,12 +143,27 @@ const Dashboard = () => {
       let categoriesData = [];
       let subCategoriesData = [];
       let ordersData = [];
-
       try {
-        productsData = await productService.getAll();
-      } catch (err) {
-        console.error('Error fetching products:', err);
-      }
+  const count = await productService.getTotalCount();
+  setTotalProductCount(count);
+} catch (err) {
+  console.error("Error fetching count:", err);
+}
+    try {
+  let result;
+
+  if (searchTerm) {
+    result = await productService.searchProducts(searchTerm);
+  } else {
+    result = await productService.getPaginated(50);
+  }
+
+  productsData = result.products;
+  setLastVisible(result.lastDoc || null);
+
+} catch (err) {
+  console.error('Error fetching products:', err);
+}
 
       try {
         categoriesData = await categoryService.getAll();
@@ -353,7 +392,7 @@ if (selectedCategory !== 'all') {
 
   // Product statistics
   const productStats = useMemo(() => {
-    const totalProducts = products.length;
+    const totalProducts = totalProductCount;
     const outOfStock = products.filter(p => (p.stock || 0) === 0).length;
     const lowStock = products.filter(p => (p.stock || 0) > 0 && (p.stock || 0) <= 10).length;
     const inStock = products.filter(p => (p.stock || 0) > 10).length;
@@ -580,7 +619,7 @@ if (selectedCategory !== 'all') {
                       {product.images.map((img, i) => (
                         <img
                           key={i}
-                          src={img}
+                          src={img} loading="lazy"
                           alt={`${product.name} ${i + 1}`}
                           className="w-full h-32 object-cover rounded-lg"
                           onError={(e) => e.target.src = 'https://via.placeholder.com/150'}
@@ -784,7 +823,7 @@ if (selectedCategory !== 'all') {
                   <div>
                     <h2 className="text-xl font-semibold text-white">Products</h2>
                     <p className="text-gray-400 text-sm">
-                      {filteredProducts.length} products • Page {currentPage} of {totalPages}
+                      {totalProductCount} products • Page {currentPage} of {totalPages}
                     </p>
                   </div>
                   
@@ -1083,13 +1122,18 @@ if (selectedCategory !== 'all') {
                           </button>
                         );
                       })}
-                      <button
-                        onClick={() => paginate(currentPage + 1)}
-                        disabled={currentPage === totalPages}
-                        className="px-4 py-2 bg-gray-800/50 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
-                      >
-                        Next
-                      </button>
+        <button
+  onClick={async () => {
+    if (currentPage === totalPages && hasMore) {
+      await loadMoreProducts();
+    }
+    paginate(currentPage + 1);
+  }}
+  disabled={currentPage === totalPages && !hasMore}
+  className="px-4 py-2 bg-gray-800/50 hover:bg-gray-700 disabled:opacity-50 text-white rounded-lg"
+>
+  Next
+</button>
                     </div>
                   </div>
                 </div>

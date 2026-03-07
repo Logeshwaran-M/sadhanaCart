@@ -1,57 +1,57 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
-import { auth, db } from "./firebase/config";
+import { auth } from "./firebase/config";
+
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
-import Dashboard from './pages/Dashboard';
-import Category from './pages/Category';
-import SubCategory from './pages/SubCategory';
-import SubUnderCategory from './pages/SubUnderCategory';
-import Brands from './pages/Brands';
-import VariantType from './pages/VariantType';
-import Variants from './pages/Variants';
-import Orders from './pages/Orders';
-import Sellers from './pages/Sellers';
-import Customers from './pages/Customers';
-import Coupons from './pages/Coupons';
-import Posters from './pages/Posters';
-import Profile from './pages/Profile';
-import JsonUploadPage from './pages/JsonUploadPage';
-import PythonAutomation from './pages/PythonAutomation';
 import Login from './pages/Login';
 import Register from './pages/Register';
-import CommissionManagement from './pages/CommissionManagement';
 import ForgotPassword from './components/ForgotPass';
-import FeaturedProducts from './pages/FeaturedProducts';
-import RecommendedProducts from './pages/Recomented';
+
+// Lazy loaded pages
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Category = lazy(() => import('./pages/Category'));
+const SubCategory = lazy(() => import('./pages/SubCategory'));
+const SubUnderCategory = lazy(() => import('./pages/SubUnderCategory'));
+const Brands = lazy(() => import('./pages/Brands'));
+const VariantType = lazy(() => import('./pages/VariantType'));
+const Variants = lazy(() => import('./pages/Variants'));
+const Orders = lazy(() => import('./pages/Orders'));
+const Sellers = lazy(() => import('./pages/Sellers'));
+const Customers = lazy(() => import('./pages/Customers'));
+const Coupons = lazy(() => import('./pages/Coupons'));
+const Posters = lazy(() => import('./pages/Posters'));
+const Profile = lazy(() => import('./pages/Profile'));
+const JsonUploadPage = lazy(() => import('./pages/JsonUploadPage'));
+const PythonAutomation = lazy(() => import('./pages/PythonAutomation'));
+const CommissionManagement = lazy(() => import('./pages/CommissionManagement'));
+const FeaturedProducts = lazy(() => import('./pages/FeaturedProducts'));
+const RecommendedProducts = lazy(() => import('./pages/Recomented'));
 
 const App = () => {
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
-  const token = localStorage.getItem("authToken");
-  return !!token; // true if token exists
-});
+    const token = localStorage.getItem("authToken");
+    return !!token;
+  });
+
   const [isLoading, setIsLoading] = useState(true);
 
   const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
   const closeSidebar = () => setIsSidebarOpen(false);
 
-  // 🔐 Firebase Auth + Firestore Role Check
+  useEffect(() => {
+    const token = localStorage.getItem("authToken");
 
-useEffect(() => {
-  const token = localStorage.getItem("authToken");
+    if (token) {
+      setIsAuthenticated(true);
+    } else {
+      setIsAuthenticated(false);
+    }
 
-  if (token) {
-    setIsAuthenticated(true);
-  } else {
-    setIsAuthenticated(false);
-  }
-
-  setIsLoading(false);
-}, []);
+    setIsLoading(false);
+  }, []);
 
   if (isLoading) {
     return (
@@ -82,36 +82,51 @@ useEffect(() => {
           element={
             isAuthenticated ? (
               <div className="flex bg-gray-900 min-h-screen">
+
                 <Sidebar isOpen={isSidebarOpen} onClose={closeSidebar} />
 
                 <div className="flex-1 lg:ml-64 flex flex-col min-h-screen">
-                  <Header 
-  onToggleSidebar={toggleSidebar} 
-  setIsAuthenticated={setIsAuthenticated} 
-/>
+
+                  <Header
+                    onToggleSidebar={toggleSidebar}
+                    setIsAuthenticated={setIsAuthenticated}
+                  />
 
                   <main className="flex-1 overflow-auto bg-gray-900">
-                    <Routes>
-                      <Route path="/" element={<Dashboard />} />
-                      <Route path="/category" element={<Category />} />
-                      <Route path="/sub-category" element={<SubCategory />} />
-                      <Route path="/sub-under-category" element={<SubUnderCategory />} />
-                      <Route path="/brands" element={<Brands />} />
-                      <Route path="/variant-type" element={<VariantType />} />
-                      <Route path="/variants" element={<Variants />} />
-                      <Route path="/orders" element={<Orders />} />
-                      <Route path="/sellers" element={<Sellers />} />
-                      <Route path="/commission" element={<CommissionManagement />} />
-                      <Route path="/customers" element={<Customers />} />
-                      <Route path="/coupons" element={<Coupons />} />
-                      <Route path="/posters" element={<Posters />} />
-                      <Route path="/json-upload" element={<JsonUploadPage />} />
-                      <Route path="/python-automation" element={<PythonAutomation />} />
-                      <Route path="/profile" element={<Profile />} />
-                      <Route path="/featured" element={<FeaturedProducts />} />
-                      <Route path="/recommended" element={<RecommendedProducts />} />
-                    </Routes>
+
+                    <Suspense
+                      fallback={
+                        <div className="text-white text-center mt-10">
+                          Loading Page...
+                        </div>
+                      }
+                    >
+
+                      <Routes>
+                        <Route path="/" element={<Dashboard />} />
+                        <Route path="/category" element={<Category />} />
+                        <Route path="/sub-category" element={<SubCategory />} />
+                        <Route path="/sub-under-category" element={<SubUnderCategory />} />
+                        <Route path="/brands" element={<Brands />} />
+                        <Route path="/variant-type" element={<VariantType />} />
+                        <Route path="/variants" element={<Variants />} />
+                        <Route path="/orders" element={<Orders />} />
+                        <Route path="/sellers" element={<Sellers />} />
+                        <Route path="/commission" element={<CommissionManagement />} />
+                        <Route path="/customers" element={<Customers />} />
+                        <Route path="/coupons" element={<Coupons />} />
+                        <Route path="/posters" element={<Posters />} />
+                        <Route path="/json-upload" element={<JsonUploadPage />} />
+                        <Route path="/python-automation" element={<PythonAutomation />} />
+                        <Route path="/profile" element={<Profile />} />
+                        <Route path="/featured" element={<FeaturedProducts />} />
+                        <Route path="/recommended" element={<RecommendedProducts />} />
+                      </Routes>
+
+                    </Suspense>
+
                   </main>
+
                 </div>
               </div>
             ) : (

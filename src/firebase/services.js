@@ -14,7 +14,7 @@ import {
   where,
   limit,
   writeBatch,
-  documentId
+  documentId, startAfter,getCountFromServer
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from './config';
@@ -1238,6 +1238,33 @@ export const subUnderCategoryService = {
 
 // Products Services
 export const productService = {
+  async searchProducts(term) {
+  const q = query(
+    collection(db, "products"),
+    where("name", ">=", term),
+    where("name", "<=", term + "\uf8ff")
+  );
+
+  const snap = await getDocs(q);
+
+  const products = snap.docs.map(doc => ({
+    id: doc.id,
+    ...doc.data()
+  }));
+
+  return { products, lastDoc: null };
+},
+
+  async getTotalCount() {
+  try {
+    const coll = collection(db, "products");
+    const snapshot = await getCountFromServer(coll);
+    return snapshot.data().count;
+  } catch (error) {
+    console.error("Error getting product count:", error);
+    return 0;
+  }
+},
   // Get all products
   async getAll() {
     try {
@@ -1255,6 +1282,45 @@ export const productService = {
       throw error;
     }
   },
+  async getPaginated(pageSize = 50, lastVisibleDoc = null) {
+    try {
+      let q;
+
+      if (lastVisibleDoc) {
+        q = query(
+          collection(db, "products"),
+         orderBy("__name__"),
+          startAfter(lastVisibleDoc),
+          limit(pageSize)
+        );
+      } else {
+        q = query(
+          collection(db, "products"),
+         orderBy("__name__"),
+          limit(pageSize)
+        );
+      }
+const snap = await getDocs(q);
+
+console.log("Fetched docs:", snap.docs.length);
+
+const lastDoc = snap.docs[snap.docs.length - 1];
+
+console.log("Last visible:", lastDoc);
+
+      const products = snap.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      return { products, lastDoc };
+
+    } catch (error) {
+      console.error("Pagination error:", error);
+      throw error;
+    }
+  }
+,
 
   // Add new product
   async add(productData, imageFiles) {

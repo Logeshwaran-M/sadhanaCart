@@ -1,13 +1,14 @@
 import emailjs from "@emailjs/browser";
 
-const SERVICE_ID = "service_g6trs4g";
-const TEMPLATE_ID = "template_j0ed6us";
-const PUBLIC_KEY = "BC9CJEdLpemI19ubS";
+const SERVICE_ID = "service_p0q4jed";
+const TEMPLATE_ID = "template_tu4jetb";
+const PUBLIC_KEY = "GagsbTDn7e50G8zL_";
 
 export const sendOrderEmail = async (order, status) => {
   try {
     let message = "";
-    switch (status.toLowerCase()) {
+    const normalizedStatus = status.trim().toLowerCase();
+    switch (normalizedStatus) {
        case "confirmed":
         message = "🛒 Your order has been placed successfully.";
         break;
@@ -23,6 +24,9 @@ export const sendOrderEmail = async (order, status) => {
       case "cancelled":
         message = "❌ Your order has been cancelled.";
         break;
+  case "return_requested":
+        message = "📩 We have received your return request. Our team is currently reviewing it.";
+        break;
       default:
         message = `Order status updated to ${status}`;
     }
@@ -34,7 +38,7 @@ export const sendOrderEmail = async (order, status) => {
         to_email: order.userEmail,
         to_name: order.userName,
         order_id: order._id,
-        order_status: status,
+      order_status: status.replace("_", " ").toUpperCase(),
         order_status_message: message,
      product_details: order.products || "N/A",
       },

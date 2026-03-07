@@ -7,6 +7,7 @@ import {
   ChevronDown, 
   User, 
   CreditCard, 
+  MessageSquare,
   Calendar, 
   Edit, 
   Trash2, 
@@ -67,11 +68,13 @@ const Orders = () => {
       processing: ordersList.filter(order => order.status === 'processing').length,
       shipped: ordersList.filter(order => order.status === 'shipped').length,
       delivered: ordersList.filter(order => order.status === 'delivered').length,
-      cancelled: ordersList.filter(order => order.status === 'cancelled').length
+      cancelled: ordersList.filter(order => order.status === 'cancelled').length,
+      return_requested: ordersList.filter(order => (order.status || order.orderStatus) === 'return_requested').length,
     };
   }, []);
 
   // Optimized fetch with caching
+// Optimized fetch with caching and status normalization
 const fetchOrders = useCallback(async () => {
   try {
     setLoading(true);
@@ -79,8 +82,29 @@ const fetchOrders = useCallback(async () => {
 
     // Remove duplicates using a Map (Key = Order ID)
     const uniqueMap = new Map();
+    
     fetchedOrders.forEach(order => {
-      if (order.id) uniqueMap.set(order.id, order);
+      if (order.id) {
+        // 1. DATA NORMALIZATION: 
+        // Prioritize orderStatus (customer updates) over status (admin updates)
+        // This ensures "return_requested" is seen even if "delivered" still exists in the 'status' field
+        const effectiveStatus = order.orderStatus || order.status || 'pending';
+
+        const normalizedOrder = {
+          ...order,
+          status: effectiveStatus // Force all logic to use this single key
+        };
+
+        // 2. LATEST UPDATE WINS:
+        // Ensure that if duplicate IDs exist, we keep the one with the most recent activity
+        const existing = uniqueMap.get(order.id);
+        const newTime = order.updatedAt?.seconds || order.createdAt?.seconds || 0;
+        const oldTime = existing?.updatedAt?.seconds || existing?.createdAt?.seconds || 0;
+
+        if (!existing || newTime >= oldTime) {
+          uniqueMap.set(order.id, normalizedOrder);
+        }
+      }
     });
 
     const uniqueList = Array.from(uniqueMap.values());
@@ -93,9 +117,12 @@ const fetchOrders = useCallback(async () => {
     });
 
     setOrders(uniqueList);
+    
+    // This will now correctly count 'return_requested' because the field is normalized
     setOrderStats(calculateStats(uniqueList));
+    
   } catch (error) {
-    console.error('Error:', error);
+    console.error('Error fetching orders:', error);
   } finally {
     setLoading(false);
   }
@@ -316,18 +343,7 @@ const handleStatusSelectChange = async (orderId, newStatus) => {
     await orderService.updateStatus(orderId, newStatus);
     
     // 2. Find order details for the email
-    const currentOrder = orders.find(o => o.id === orderId);
-    
-    if (currentOrder) {
-      const emailData = {
-        userName: currentOrder.customerName,
-        userEmail: currentOrder.customerEmail,
-        _id: orderId,
-      };
-      
-      // 3. Send the email
-      await sendOrderEmail(emailData, newStatus);
-    }
+
 
     // 4. Refresh UI
     await fetchOrders();
@@ -464,74 +480,100 @@ const handleStatusSelectChange = async (orderId, newStatus) => {
 // Add this ref at the very top of your Orders component (after your states)
 const processedOrders = React.useRef(new Set());
 
-// Ensure this ref is defined at the top of your component
 
+const handleEmailSend = async (userRef, orderId, status, orderData) => {
+  try {
+    if (!userRef) return;
+    
+    // Get the User document to find the customer's email
+    const userSnap = await getDoc(userRef);
+    if (userSnap.exists()) {
+      const userData = userSnap.data();
+      
+      if (userData.email) {
+        // Format products list into a string (e.g., "iPhone 15 (x1), AirPods (x2)")
+        const items = orderData.products || orderData.items || [];
+        const formattedProducts = items.length > 0 
+          ? items.map(i => `${i.name || i.productName} (x${i.quantity || 1})`).join(", ")
+          : "No items listed";
+
+        // Call your existing EmailJS utility
+        await sendOrderEmail({
+          userEmail: userData.email,
+          userName: userData.name || "Customer",
+          _id: orderId,
+          products: formattedProducts 
+        }, status);
+        
+        console.log(`📧 Email sent for order ${orderId} with status: ${status}`);
+      }
+    }
+  } catch (err) {
+    console.error("❌ Email trigger error:", err);
+  }
+};
+
+
+// Ensure this ref is defined at the top of your component
 useEffect(() => {
   const ordersRef = collectionGroup(db, "orders");
   const appStartTime = Date.now();
 
   const unsubscribe = onSnapshot(ordersRef, async (snapshot) => {
+    // 1. DEDUPLICATE & NORMALIZE DATA
+    const uniqueMap = new Map();
+    snapshot.docs.forEach(doc => {
+      const data = doc.data();
+      uniqueMap.set(doc.id, {
+        id: doc.id,
+        ...data,
+        // Ensure status is normalized for consistent UI colors/counts
+        status: data.orderStatus || data.status || 'pending'
+      });
+    });
+
+    const uniqueList = Array.from(uniqueMap.values());
+    
+    // Sort Newest First
+    uniqueList.sort((a, b) => {
+      const timeA = a.updatedAt?.seconds || a.createdAt?.seconds || 0;
+      const timeB = b.updatedAt?.seconds || b.createdAt?.seconds || 0;
+      return timeB - timeA;
+    });
+
+    // Update UI State (This fixes the "2 times" duplicate issue)
+    setOrders(uniqueList);
+    setOrderStats(calculateStats(uniqueList));
+
+    // 2. SMART EMAIL TRIGGER (Only fire for actual changes)
     snapshot.docChanges().forEach(async (change) => {
       const orderData = change.doc.data();
       const orderId = change.doc.id;
       const status = orderData.orderStatus || orderData.status;
 
-      // Format Products into a readable string
-      const items = orderData.products || orderData.items || [];
-      const formattedProducts = items.length > 0 
-        ? items.map(item => `${item.name || item.productName} (x${item.quantity || 1})`).join(", ")
-        : "No items listed";
-
+      // Logic for NEW orders
       if (change.type === "added") {
         const timestamp = orderData.orderDate || orderData.createdAt;
         const orderTime = timestamp?.seconds * 1000 || 0;
-        const isBrandNew = orderTime > appStartTime && (Date.now() - orderTime) < 60000;
-
-        if (isBrandNew && !processedOrders.current.has(orderId)) {
+        
+        // Only trigger if order is new AND created after dashboard was opened
+        if (orderTime > appStartTime && !processedOrders.current.has(orderId)) {
           processedOrders.current.add(orderId);
-          // Pass the formatted products here
-          await handleEmailSend(change.doc.ref.parent.parent, orderId, "Confirmed", formattedProducts);
+          await handleEmailSend(change.doc.ref.parent.parent, orderId, "Confirmed", orderData);
         }
       }
 
+      // Logic for STATUS updates (Return, Shipped, etc.)
       if (change.type === "modified") {
         if (status && status.toLowerCase() !== "pending") {
-          // Status updates also need formatted products
-          await handleEmailSend(change.doc.ref.parent.parent, orderId, status, formattedProducts);
+          await handleEmailSend(change.doc.ref.parent.parent, orderId, status, orderData);
         }
       }
     });
   });
 
-  const handleEmailSend = async (userRef, orderId, status, productDetails) => {
-    try {
-      if (userRef) {
-        const userSnap = await getDoc(userRef);
-        if (userSnap.exists()) {
-          const userData = userSnap.data();
-          if (userData.email) {
-            console.log("📤 PREPARING EMAIL PAYLOAD:", {
-            to: userData.email,
-            id: orderId,
-            status: status,
-            items: productDetails // This should show your products
-          });
-            await sendOrderEmail({
-              userEmail: userData.email,
-              userName: userData.name || "Customer",
-              _id: orderId,
-              products: productDetails // Pass string to the utility
-            }, status);
-          }
-        }
-      }
-    } catch (err) {
-      console.error("❌ Email trigger error:", err);
-    }
-  };
-
   return () => unsubscribe();
-}, []);
+}, [calculateStats]);
 
   const extractOrderSKUs = (order) => {
     const skus = [];
@@ -561,12 +603,13 @@ useEffect(() => {
   };
 
   const getStatusColor = (status) => {
-    switch (status) {
+   switch (status?.toString().toLowerCase().trim()){
       case 'delivered': return 'bg-green-500';
       case 'shipped': return 'bg-blue-500';
       case 'processing': return 'bg-yellow-500';
       case 'pending': return 'bg-orange-500';
       case 'cancelled': return 'bg-red-500';
+      case 'return_requested': return 'bg-purple-500';
       default: return 'bg-gray-500';
     }
   };
@@ -690,6 +733,7 @@ useEffect(() => {
                 <option value="shipped">Shipped</option>
                 <option value="delivered">Delivered</option>
                 <option value="cancelled">Cancelled</option>
+                <option value="return_requested">Return Requested</option>
               </select>
               <ChevronDown className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none" size={16} />
             </div>
@@ -705,7 +749,8 @@ useEffect(() => {
           { key: 'processing', label: 'Processing', color: 'yellow', icon: RefreshCw },
           { key: 'shipped', label: 'Shipped', color: 'purple', icon: Package },
           { key: 'delivered', label: 'Delivered', color: 'green', icon: Save },
-          { key: 'cancelled', label: 'Cancelled', color: 'red', icon: Trash2 }
+          { key: 'cancelled', label: 'Cancelled', color: 'red', icon: Trash2 },
+         { key: 'return_requested', label: 'Return Requests', color: 'purple', icon: MessageSquare }
         ].map((stat) => {
           const IconComponent = stat.icon;
           return (
@@ -844,12 +889,12 @@ useEffect(() => {
                         <td className="px-6 py-4">
                           <div className="flex flex-col space-y-2">
                             <div className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(order.status)} text-white`}>
-                              {order.status}
+                             {order.orderStatus || order.status}
                             </div>
                             <div className="flex space-x-1">
                               {/* Change this select and remove the button logic below it */}
 <select
-  value={order.status} // Use order.status directly
+ value={order.orderStatus || order.status}// Use order.status directly
   onChange={(e) => handleStatusSelectChange(order.id, e.target.value)}
   className="bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
 >
@@ -858,6 +903,7 @@ useEffect(() => {
   <option value="shipped">Shipped</option>
   <option value="delivered">Delivered</option>
   <option value="cancelled">Cancelled</option>
+  <option value="return_requested">Returned</option>
 </select>
                               {pendingStatusChanges[order.id] && pendingStatusChanges[order.id] !== order.status && (
                                 <button
@@ -968,7 +1014,7 @@ useEffect(() => {
                       <div className="flex justify-between items-center">
                         <span className="text-sm text-gray-400">Status</span>
                         <div className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(order.status)} text-white`}>
-                          {order.status}
+                          {(order.orderStatus || order.status)?.replace("_", " ")}
                         </div>
                       </div>
                     </div>
@@ -976,7 +1022,7 @@ useEffect(() => {
                     {/* Actions */}
                     <div className="space-y-2 pt-3 border-t border-gray-700">
                       <select
-                        value={pendingStatusChanges[order.id] || order.status}
+                        value={pendingStatusChanges[order.id] || order.status||order.orderStatus}
                         onChange={(e) => handleStatusSelectChange(order.id, e.target.value)}
                         className="w-full bg-gray-700 text-white text-sm px-3 py-2 rounded border border-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
                       >
@@ -985,6 +1031,7 @@ useEffect(() => {
                         <option value="shipped">Shipped</option>
                         <option value="delivered">Delivered</option>
                         <option value="cancelled">Cancelled</option>
+                         <option value="return_requested">Returned</option>
                       </select>
                       
                       <div className="flex gap-2">
